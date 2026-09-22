@@ -4,7 +4,6 @@ import React, { useState, useRef } from 'react';
 import {
   UploadCloud,
   FileText,
-  AlertCircle,
   Key,
   Sparkles,
   ArrowRight,
@@ -84,7 +83,7 @@ export function UploadZone({ onAnalysisComplete, onError }: UploadZoneProps) {
     setIsLoading(true);
     setLoadingStep(0);
 
-    // Simulated progress steps for great UX
+    // Simulated progress steps for UX
     const interval = setInterval(() => {
       setLoadingStep((prev) => (prev < loadingStages.length - 1 ? prev + 1 : prev));
     }, 3500);
@@ -102,12 +101,23 @@ export function UploadZone({ onAnalysisComplete, onError }: UploadZoneProps) {
       });
 
       clearInterval(interval);
-      const result = await response.json();
+
+      // Safe JSON parsing to prevent "Unexpected end of JSON input" on serverless timeouts
+      const rawText = await response.text();
+      let result;
+      try {
+        result = JSON.parse(rawText);
+      } catch (parseErr) {
+        throw new Error(
+          'Server timed out or returned an invalid response. If using Vercel Free tier, ensure gemini-2.5-flash is configured in lib/gemini.ts.'
+        );
+      }
 
       if (!response.ok) {
         throw new Error(result.error || 'Failed to analyze RFP');
       }
 
+      setIsLoading(false);
       onAnalysisComplete(result.data);
     } catch (err: any) {
       clearInterval(interval);
