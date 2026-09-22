@@ -12,7 +12,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { RFPAnalysis } from '@/types/rfp';
-import { SAMPLE_RFP_ANALYSIS } from '@/lib/sample-data';
+import { SAMPLE_RFP_ANALYSIS, HILL_AFB_RFP_ANALYSIS } from '@/lib/sample-data';
 
 interface UploadZoneProps {
   onAnalysisComplete: (analysis: RFPAnalysis) => void;
@@ -141,6 +141,21 @@ export function UploadZone({ onAnalysisComplete, onError }: UploadZoneProps) {
     }, 2000);
   };
 
+  const handleLoadHillAfb = () => {
+    setIsLoading(true);
+    setLoadingStep(0);
+
+    const interval = setInterval(() => {
+      setLoadingStep((prev) => (prev < loadingStages.length - 1 ? prev + 1 : prev));
+    }, 400);
+
+    setTimeout(() => {
+      clearInterval(interval);
+      setIsLoading(false);
+      onAnalysisComplete(HILL_AFB_RFP_ANALYSIS);
+    }, 1600);
+  };
+
   return (
     <div className="w-full max-w-2xl mx-auto space-y-6">
       {/* Upload Box */}
@@ -239,13 +254,23 @@ export function UploadZone({ onAnalysisComplete, onError }: UploadZoneProps) {
 
           <button
             type="button"
+            onClick={handleLoadHillAfb}
+            disabled={isLoading}
+            className="w-full sm:w-auto py-3 px-4 rounded-xl font-semibold text-xs text-indigo-200 bg-indigo-950/60 hover:bg-indigo-900/80 border border-indigo-500/40 transition flex items-center justify-center gap-1.5 shadow-sm active:scale-[0.98]"
+            title="Load USAF Hill AFB Solicitation (FA8222-26-Q-3456)"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            <span>Load Hill AFB (FA8222-26-Q-3456)</span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleLoadSample}
             disabled={isLoading}
-            className="w-full sm:w-auto py-3 px-5 rounded-xl font-medium text-xs text-slate-300 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 transition flex items-center justify-center gap-2"
-            title="Load sample federal RFP analysis without uploading"
+            className="w-full sm:w-auto py-3 px-4 rounded-xl font-medium text-xs text-slate-300 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 transition flex items-center justify-center gap-1.5"
+            title="Load VA EHR Cloud Modernization Sample"
           >
-            <Sparkles className="w-4 h-4 text-amber-400" />
-            <span>Try Sample Federal RFP</span>
+            <span>Load VA EHR RFP</span>
           </button>
         </div>
       )}
