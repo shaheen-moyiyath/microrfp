@@ -14,6 +14,7 @@ export async function POST(request: NextRequest) {
     let isTruncated = false;
     let customApiKey: string | undefined;
 
+    // Parse Input Payload
     if (contentType.includes('multipart/form-data')) {
       const formData = await request.formData();
       const file = formData.get('file') as File | null;
@@ -26,8 +27,8 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Check file size (max 20MB to prevent memory spikes on serverless execution)
-      const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+      // Enforce 20MB payload limit
+      const MAX_FILE_SIZE = 20 * 1024 * 1024;
       if (file.size > MAX_FILE_SIZE) {
         return NextResponse.json(
           { error: 'File size exceeds the 20MB limit.' },
@@ -63,8 +64,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Call Gemini API with low temperature and structured output schema
-    const analysis = await analyzeRFPWithGemini(rfpText, customApiKey);
+    // Validate API Key presence early before long extraction
+    const activeApiKey = customApiKey || process.env.GEMINI_API_KEY;
+    if (!activeApiKey) {
+      return NextResponse.json(
+        { 
+          error: 'Gemini API Key missing. Please enter a valid API key in the interface or configure GEMINI_API_KEY in your Vercel project settings.' 
+        },
+        { status: 401 }
+      );
+    }
+
+    // Execute Gemini with a strict timeout race (fails gracefully before Vercel hard kills the route)
+    const analysisPromise = analyzeRFPWithGemini(rfpText, activeApiKey);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('AI analysis timed out after 50 seconds. Try using a smaller PDF or a faster model.')), 50000)
+    );
+
+    const analysis = await Promise.race([analysisPromise, timeoutPromise]);
 
     return NextResponse.json({
       success: true,
@@ -75,11 +92,14 @@ export async function POST(request: NextRequest) {
         isTruncated,
       },
     });
+
   } catch (error: any) {
-    console.error('Error analyzing RFP:', error);
+    console.error('Error analyzing RFP in API route:', error);
+
+    // Guaranteed JSON response even on unexpected failures
     return NextResponse.json(
       {
-        error: error.message || 'An unexpected error occurred during RFP analysis',
+        error: error.message || 'An unexpected error occurred during RFP analysis.',
       },
       { status: 500 }
     );
