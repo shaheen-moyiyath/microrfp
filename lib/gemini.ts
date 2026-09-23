@@ -30,16 +30,14 @@ export async function analyzeRFPWithGemini(
   const ai = new GoogleGenAI({ apiKey });
   const prompt = buildPrompt(rfpText);
 
-  // Model fallback chain: tries primary, then cascades through available high-capacity models
+  // Valid, supported models for v1beta in @google/genai
   const modelCandidates = [
     process.env.GEMINI_MODEL,
     'gemini-2.5-flash',
-    'gemini-2.0-flash',
-    'gemini-3.8-flash',
-    'gemini-1.5-flash',
+    'gemini-2.5-pro',
+    'gemini-flash-latest',
   ].filter((m): m is string => Boolean(m));
 
-  // Remove duplicates while preserving order
   const uniqueModels = Array.from(new Set(modelCandidates));
 
   const config = {
@@ -49,11 +47,11 @@ export async function analyzeRFPWithGemini(
     maxOutputTokens: 8192,
   };
 
-  let lastError: any = null;
+  let lastMeaningfulError: any = null;
 
   for (const model of uniqueModels) {
-    // Up to 2 attempts per model for transient 503 spikes
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    // Up to 3 attempts with backoff for transient 503/429 spikes
+    for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         const response = await ai.models.generateContent({
           model,
@@ -70,46 +68,52 @@ export async function analyzeRFPWithGemini(
         const parsed: RFPAnalysis = JSON.parse(cleaned);
         return parsed;
       } catch (error: any) {
-        lastError = error;
         const status = error?.status;
         const msg = (error?.message || '').toLowerCase();
 
         const is503 = status === 503 || msg.includes('503') || msg.includes('high demand') || msg.includes('unavailable');
         const isRateLimit = status === 429 || msg.includes('429') || msg.includes('quota') || msg.includes('resource_exhausted');
+        const is404 = status === 404 || msg.includes('404') || msg.includes('not found');
 
-        // If 503 high demand or 429, wait 2 seconds before retry or next model
-        if ((is503 || isRateLimit) && attempt === 1) {
-          await sleep(2000);
-          continue; // retry same model once
+        // Only store as meaningful error if it's not a generic 404 (model name mismatch)
+        if (!is404 || !lastMeaningfulError) {
+          lastMeaningfulError = error;
         }
 
-        // If not retryable on this model, break to try the next model candidate
+        // For transient 503 high demand spikes or 429 rate limits, pause with exponential backoff and retry
+        if ((is503 || isRateLimit) && attempt < 3) {
+          const delay = attempt * 2000; // 2s on 1st retry, 4s on 2nd retry
+          await sleep(delay);
+          continue;
+        }
+
+        // If it's a 404 or exhausted retries on this model, switch to the next candidate model
         break;
       }
     }
   }
 
-  // If all models and retries failed, parse last error into user-friendly message
-  const errorStr = (lastError?.message || '').toLowerCase();
-  const status = lastError?.status;
+  // Parse meaningful error into clean user-facing guidance
+  const errorStr = (lastMeaningfulError?.message || '').toLowerCase();
+  const status = lastMeaningfulError?.status;
 
   if (status === 503 || errorStr.includes('503') || errorStr.includes('high demand') || errorStr.includes('unavailable')) {
     throw new Error(
-      'Gemini AI servers are temporarily experiencing high demand across models. Please wait 30 seconds and try analyzing again.'
+      'Google Gemini AI is temporarily experiencing high server demand. We automatically retried 3 times, but capacity is still limited. Please wait 15–30 seconds and try again.'
     );
   }
 
   if (status === 429 || errorStr.includes('429') || errorStr.includes('quota') || errorStr.includes('resource_exhausted')) {
     throw new Error(
-      'Gemini API rate limit or quota exceeded. Please wait a minute or check your quota at ai.google.dev.'
+      'Gemini API rate limit or quota exceeded. Please wait a minute before submitting your next document.'
     );
   }
 
   if (status === 401 || status === 403 || errorStr.includes('api key not valid') || errorStr.includes('api_key_invalid')) {
     throw new Error(
-      'Invalid Gemini API key. Please verify your GEMINI_API_KEY environment variable in your Vercel Project Settings.'
+      'Invalid Gemini API key. Please verify your GEMINI_API_KEY in your Vercel Project Settings.'
     );
   }
 
-  throw new Error(`Gemini RFP analysis failed: ${lastError?.message || lastError}`);
+  throw new Error(`Gemini RFP analysis failed: ${lastMeaningfulError?.message || lastMeaningfulError}`);
 }
