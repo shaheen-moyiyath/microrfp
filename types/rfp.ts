@@ -36,4 +36,6 @@ export interface RFPAnalysis {
   compliance_matrix: ComplianceItem[];
   evaluation_criteria: EvaluationCriterion[];
   draft_proposal_outline: ProposalSection[];
+  provider?: 'gemini' | 'groq';
+  fallbackTriggered?: boolean;
 }

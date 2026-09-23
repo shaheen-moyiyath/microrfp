@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { extractPdfText } from '@/lib/pdf-extract';
 import { analyzeRFPWithGemini } from '@/lib/gemini';
+import { analyzeRFPWithGroq } from '@/lib/groq';
+import { RFPAnalysis } from '@/types/rfp';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -13,12 +15,14 @@ export async function POST(request: NextRequest) {
     let wordCount = 0;
     let isTruncated = false;
     let customApiKey: string | undefined;
+    let requestedProvider: string | undefined;
 
     // Parse Input Payload
     if (contentType.includes('multipart/form-data')) {
       const formData = await request.formData();
       const file = formData.get('file') as File | null;
       customApiKey = (formData.get('apiKey') as string) || undefined;
+      requestedProvider = (formData.get('provider') as string) || undefined;
 
       if (!file) {
         return NextResponse.json(
@@ -48,6 +52,7 @@ export async function POST(request: NextRequest) {
       const body = await request.json();
       rfpText = body.rfpText;
       customApiKey = body.apiKey;
+      requestedProvider = body.provider;
 
       if (!rfpText || rfpText.trim().length < 50) {
         return NextResponse.json(
@@ -64,24 +69,77 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate API Key presence early before long extraction
-    const activeApiKey = customApiKey || process.env.GEMINI_API_KEY;
-    if (!activeApiKey) {
+    const geminiKey = customApiKey || process.env.GEMINI_API_KEY;
+    const groqKey = process.env.GROQ_API_KEY;
+
+    if (!geminiKey && !groqKey) {
       return NextResponse.json(
-        { 
-          error: 'Gemini API Key missing. Please enter a valid API key in the interface or configure GEMINI_API_KEY in your Vercel project settings.' 
+        {
+          error:
+            'No AI API Key configured. Please add GEMINI_API_KEY or GROQ_API_KEY to your environment variables in Vercel settings.',
         },
         { status: 401 }
       );
     }
 
-    // Execute Gemini with a strict timeout race (fails gracefully before Vercel hard kills the route)
-    const analysisPromise = analyzeRFPWithGemini(rfpText, activeApiKey);
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('AI analysis timed out after 50 seconds. Try using a smaller PDF or a faster model.')), 50000)
-    );
+    let analysis: RFPAnalysis;
+    let providerUsed = 'gemini';
+    let fallbackTriggered = false;
 
-    const analysis = await Promise.race([analysisPromise, timeoutPromise]);
+    // Timeout promise (52s timeout to respond before Vercel 60s hard kill)
+    const createTimeout = (ms: number) =>
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error('AI analysis timed out after 50 seconds. Please try a shorter document.')
+            ),
+          ms
+        )
+      );
+
+    // If Groq is explicitly requested and key is available
+    if (requestedProvider === 'groq' && groqKey) {
+      providerUsed = 'groq';
+      analysis = await Promise.race([analyzeRFPWithGroq(rfpText), createTimeout(50000)]);
+    } else if (geminiKey) {
+      // Primary: Google Gemini with automated fallback to Groq on failure/rate limit
+      try {
+        providerUsed = 'gemini';
+        analysis = await Promise.race([
+          analyzeRFPWithGemini(rfpText, geminiKey),
+          createTimeout(30000), // Give Gemini 30s before falling back to Groq
+        ]);
+      } catch (geminiError: any) {
+        console.warn('Gemini analysis failed or timed out:', geminiError?.message);
+
+        // If Groq is configured, attempt execution as automated fallback
+        if (groqKey) {
+          console.info('Attempting fallback to Groq Cloud (llama-3.3-70b-versatile)...');
+          providerUsed = 'groq';
+          fallbackTriggered = true;
+          try {
+            analysis = await Promise.race([
+              analyzeRFPWithGroq(rfpText),
+              createTimeout(20000),
+            ]);
+          } catch (groqError: any) {
+            throw new Error(
+              `Both Gemini and Groq fallback failed. Gemini error: ${geminiError.message}. Groq error: ${groqError.message}`
+            );
+          }
+        } else {
+          throw geminiError;
+        }
+      }
+    } else {
+      // Only Groq key is available
+      providerUsed = 'groq';
+      analysis = await Promise.race([analyzeRFPWithGroq(rfpText), createTimeout(50000)]);
+    }
+
+    analysis.provider = providerUsed as 'gemini' | 'groq';
+    analysis.fallbackTriggered = fallbackTriggered;
 
     return NextResponse.json({
       success: true,
@@ -90,13 +148,13 @@ export async function POST(request: NextRequest) {
         pageCount,
         wordCount,
         isTruncated,
+        provider: providerUsed,
+        fallbackTriggered,
       },
     });
-
   } catch (error: any) {
     console.error('Error analyzing RFP in API route:', error);
 
-    // Guaranteed JSON response even on unexpected failures
     return NextResponse.json(
       {
         error: error.message || 'An unexpected error occurred during RFP analysis.',

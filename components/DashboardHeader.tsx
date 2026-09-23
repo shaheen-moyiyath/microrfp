@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Check,
   Hash,
+  Zap,
 } from 'lucide-react';
 
 interface DashboardHeaderProps {
@@ -95,6 +96,23 @@ ${analysis.verdict_rationale.map((r) => `- ${r}`).join('\n')}
               <span className="font-semibold text-slate-400">Budget:</span>
               <span className="font-medium text-emerald-200">{analysis.estimated_budget}</span>
             </div>
+
+            {analysis.provider && (
+              <div
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${
+                  analysis.provider === 'groq'
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                    : 'bg-indigo-500/10 border-indigo-500/30 text-indigo-300'
+                }`}
+              >
+                <Zap className="w-3.5 h-3.5 text-amber-400" />
+                <span className="font-semibold text-slate-400">Engine:</span>
+                <span className="font-medium">
+                  {analysis.provider === 'groq' ? 'Groq Cloud (Llama 3.3 70B)' : 'Google Gemini'}
+                  {analysis.fallbackTriggered ? ' [Auto-Fallback]' : ''}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
