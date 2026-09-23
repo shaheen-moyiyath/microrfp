@@ -4,7 +4,6 @@ import React, { useState, useRef } from 'react';
 import {
   UploadCloud,
   FileText,
-  Key,
   Sparkles,
   ArrowRight,
   ShieldCheck,
@@ -24,8 +23,6 @@ export function UploadZone({ onAnalysisComplete, onError }: UploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState(0);
-  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
-  const [apiKey, setApiKey] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadingStages = [
@@ -91,9 +88,6 @@ export function UploadZone({ onAnalysisComplete, onError }: UploadZoneProps) {
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
-      if (apiKey.trim()) {
-        formData.append('apiKey', apiKey.trim());
-      }
 
       const response = await fetch('/api/analyze', {
         method: 'POST',
@@ -275,38 +269,8 @@ export function UploadZone({ onAnalysisComplete, onError }: UploadZoneProps) {
         </div>
       )}
 
-      {/* Optional Custom Gemini API Key Collapsible */}
-      <div className="pt-2 border-t border-slate-800/80">
-        <button
-          type="button"
-          onClick={() => setShowApiKeyInput(!showApiKeyInput)}
-          className="text-xs text-slate-500 hover:text-slate-400 flex items-center gap-1.5 mx-auto transition"
-        >
-          <Key className="w-3.5 h-3.5" />
-          {showApiKeyInput ? 'Hide Custom Gemini API Key' : 'Provide custom Gemini API Key (optional)'}
-        </button>
-
-        {showApiKeyInput && (
-          <div className="mt-3 p-4 rounded-xl bg-slate-950/80 border border-slate-800 text-left space-y-2">
-            <label className="block text-xs font-medium text-slate-300">
-              Google Gemini API Key
-            </label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="AIzaSy..."
-              className="w-full px-3 py-2 text-xs rounded-lg bg-slate-900 border border-slate-800 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono"
-            />
-            <p className="text-[11px] text-slate-500">
-              Not needed if <code className="text-slate-400">GEMINI_API_KEY</code> is set in <code className="text-slate-400">.env.local</code>. Never stored or logged.
-            </p>
-          </div>
-        )}
-      </div>
-
       {/* Security & Accuracy Badge */}
-      <div className="flex items-center justify-center gap-4 text-xs text-slate-400 pt-2">
+      <div className="flex items-center justify-center gap-4 text-xs text-slate-400 pt-2 border-t border-slate-800/80">
         <div className="flex items-center gap-1.5">
           <ShieldCheck className="w-4 h-4 text-emerald-400" />
           <span>Strict Factual Accuracy</span>
