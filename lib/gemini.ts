@@ -33,6 +33,7 @@ export async function analyzeRFPWithGemini(
   // Valid, supported models for v1beta in @google/genai
   const modelCandidates = [
     process.env.GEMINI_MODEL,
+    'gemini-2.0-flash',
     'gemini-2.5-flash',
     'gemini-2.5-pro',
     'gemini-flash-latest',

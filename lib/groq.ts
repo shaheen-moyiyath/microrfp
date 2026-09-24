@@ -22,12 +22,24 @@ export async function analyzeRFPWithGroq(
   }
 
   const groq = new Groq({ apiKey });
-  const model = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+
+  // Priority model cascade: Try requested/70B first, fallback to widely available instant models
+  const candidateModels = [
+    process.env.GROQ_MODEL,
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
+    'llama-3.1-70b-versatile',
+    'llama3-70b-8192',
+    'llama3-8b-8192',
+    'mixtral-8x7b-32768',
+  ].filter((m): m is string => Boolean(m));
+
+  const uniqueModels = Array.from(new Set(candidateModels));
 
   const systemMessage = `You are MicroRFP, an elite B2B Government Contracting & Enterprise Proposal Strategist. Your goal is to conduct an exhaustive analysis of a Request for Proposal (RFP) document and generate an immediate, highly accurate executive summary, a Bid/No-Bid Decision Scorecard, a Compliance & Eligibility Matrix, and a structured Draft Proposal Response Outline.
 
 ### OPERATING PRINCIPLES:
-1. STRICT ACCURACY: Extract details solely based on the provided RFP text. Never fabricate or extrapolate information. If a field (e.g., explicit budget, clear evaluation weighting, submission email) is missing, explicitly set its value to "Not Specified in RFP".
+1. STRICT ACCURACY: Extract details solely based on the provided RFP text. Never fabricate or extrapolate information. If a field is missing, explicitly set its value to "Not Specified in RFP".
 2. RISK-AWARE ANALYSIS: Evaluate mandatory requirements, security certifications, tight timelines, and heavy financial/legal penalties to identify potential red flags for vendors.
 3. CONCRETE ACTIONABILITY: Make all insights clear, structured, and immediately useful for a proposal team deciding whether to invest hours in bidding.
 
@@ -82,52 +94,86 @@ You MUST respond ONLY with a valid JSON object matching the following structure:
   ]
 }`;
 
-  try {
-    const chatCompletion = await groq.chat.completions.create({
-      model,
-      temperature: 0.2,
-      response_format: { type: 'json_object' },
-      messages: [
-        {
-          role: 'system',
-          content: systemMessage,
-        },
-        {
-          role: 'user',
-          content: `<rfp_text>\n${rfpText}\n</rfp_text>`,
-        },
-      ],
-    });
+  let lastError: any = null;
 
-    const rawOutput = chatCompletion.choices[0]?.message?.content || '';
-    if (!rawOutput) {
-      throw new Error('Received an empty response from Groq Cloud model.');
+  for (const model of uniqueModels) {
+    try {
+      const chatCompletion = await groq.chat.completions.create({
+        model,
+        temperature: 0.2,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content: systemMessage,
+          },
+          {
+            role: 'user',
+            content: `<rfp_text>\n${rfpText}\n</rfp_text>`,
+          },
+        ],
+      });
+
+      const rawOutput = chatCompletion.choices[0]?.message?.content || '';
+      if (!rawOutput) {
+        throw new Error(`Received an empty response from Groq Cloud model ${model}.`);
+      }
+
+      const cleaned = cleanJsonOutput(rawOutput);
+      const parsed: RFPAnalysis = JSON.parse(cleaned);
+      return parsed;
+    } catch (error: any) {
+      lastError = error;
+      const status = error?.status;
+      const msg = (error?.message || '').toLowerCase();
+
+      // If model not found or no access (404), try the next candidate model
+      if (status === 404 || msg.includes('does not exist') || msg.includes('not_found')) {
+        continue;
+      }
+
+      // If rate limited (429), try next model candidate
+      if (status === 429 || msg.includes('429') || msg.includes('rate limit')) {
+        continue;
+      }
+
+      // If invalid API key (401/403), stop immediately
+      if (
+        status === 401 ||
+        status === 403 ||
+        msg.includes('invalid_api_key') ||
+        msg.includes('unauthorized')
+      ) {
+        throw new Error(
+          'Invalid Groq API key. Please check your GROQ_API_KEY environment variable in your Vercel Project Settings.'
+        );
+      }
+
+      // Other error: try next model
+      continue;
     }
-
-    const cleaned = cleanJsonOutput(rawOutput);
-    const parsed: RFPAnalysis = JSON.parse(cleaned);
-    return parsed;
-  } catch (error: any) {
-    const status = error?.status;
-    const msg = (error?.message || '').toLowerCase();
-
-    if (status === 429 || msg.includes('429') || msg.includes('rate limit')) {
-      throw new Error(
-        'Groq Cloud API rate limit exceeded. Please wait 60 seconds before making another request.'
-      );
-    }
-
-    if (
-      status === 401 ||
-      status === 403 ||
-      msg.includes('invalid_api_key') ||
-      msg.includes('unauthorized')
-    ) {
-      throw new Error(
-        'Invalid Groq API key. Please check your GROQ_API_KEY environment variable in your Vercel Project Settings.'
-      );
-    }
-
-    throw new Error(`Groq RFP analysis failed: ${error.message || error}`);
   }
+
+  // If all candidate models failed
+  const errorMsg = (lastError?.message || '').toLowerCase();
+  const errorStatus = lastError?.status;
+
+  if (errorStatus === 429 || errorMsg.includes('429') || errorMsg.includes('rate limit')) {
+    throw new Error(
+      'Groq Cloud API rate limit exceeded across models. Please wait 60 seconds before making another request.'
+    );
+  }
+
+  if (
+    errorStatus === 401 ||
+    errorStatus === 403 ||
+    errorMsg.includes('invalid_api_key') ||
+    errorMsg.includes('unauthorized')
+  ) {
+    throw new Error(
+      'Invalid Groq API key. Please check your GROQ_API_KEY environment variable in your Vercel Project Settings.'
+    );
+  }
+
+  throw new Error(`Groq RFP analysis failed: ${lastError?.message || lastError}`);
 }
